@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from glob import glob
 import os
 import re
@@ -38,6 +39,7 @@ rename_map = {
 
 async def run(
     headless: bool,
+    limit: int,
     skip_rows: list[str],
 ):
     async with Stealth().use_async(async_playwright()) as p:
@@ -53,7 +55,7 @@ async def run(
 
         page = await browser.new_page()
 
-        await extract_reviews(page, [int(s) for s in skip_rows])
+        await extract_reviews(page, limit, [int(s) for s in skip_rows])
 
         await browser.close()
 
@@ -98,11 +100,12 @@ def load_seen_uids(idx: int):
 
 def extract_rating(text):
     match = re.search(r"(\d+(?:\.\d+)?)\s*stars?", text)
-    return float(match.group(1)) if match else None
+    return float(match[1]) if match else None
 
 
 async def extract_reviews(
     page: Page,
+    limit: int,
     skip_rows: list[int],
 ):
     df = pd.read_excel("Products.xlsx")
@@ -139,7 +142,7 @@ async def extract_reviews(
         review_idx = len(seen_from_disk)
 
         async for review, uid in iter_reviews(
-            page, product_name, external_seen=seen_from_disk
+            page, product_name, limit=limit, external_seen=seen_from_disk
         ):
             review_idx += 1
 
@@ -269,7 +272,7 @@ async def visit_product_link(page: Page, product_url: str, wait_until):
 async def iter_reviews(
     page: Page,
     product_name: str,
-    limit=1000,
+    limit: int,
     max_no_new=500,
     poll_interval=0.02,
     external_seen=None,
@@ -285,14 +288,10 @@ async def iter_reviews(
         )
 
     async def reopen_reviews_tab():
-        try:
+        with contextlib.suppress(Exception):
             await page.wait_for_load_state("networkidle")
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             await page.click("span:has-text('See all reviews')")
-        except Exception:
-            pass
         await page.wait_for_timeout(1000)
 
     info(f"Total reviews to fetch: {limit}")
@@ -402,6 +401,12 @@ if __name__ == "__main__":
         help="Headless mode",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=1000,
+        help="Number of reviews to scrape for every product URL",
+    )
+    parser.add_argument(
         "--skip_rows",
         type=comma_separated_list,
         help="Rows to skip",
@@ -412,6 +417,7 @@ if __name__ == "__main__":
     asyncio.run(
         run(
             args.headless,
-            args.skip_rows if args.skip_rows else [],
+            args.limit,
+            args.skip_rows or [],
         )
     )
